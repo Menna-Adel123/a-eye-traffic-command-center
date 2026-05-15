@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A-Eye Traffic Command Center — Analytics V2</title>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="css/style.css">
+
+</head>
+<body>
+
+<div class="av2-layout">
+  <!-- Header -->
+  <header class="header-bar">
+    <div class="header-left">
+      <div class="flex items-center gap-3">
+        <svg width="24" height="24" viewBox="0 0 32 32" fill="none" aria-label="A-Eye Logo">
+          <rect x="2" y="2" width="28" height="28" rx="6" fill="rgba(61,90,254,0.1)" stroke="var(--primary)" stroke-width="1.5"/>
+          <circle cx="16" cy="14" r="5" stroke="var(--primary)" stroke-width="1.8" fill="none"/>
+          <circle cx="16" cy="14" r="1.8" fill="var(--primary)"/>
+          <path d="M8 24 L16 20 L24 24" stroke="var(--primary)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <div class="header-title">A-Eye Traffic Command Center — Alexandria</div>
+          <div class="header-subtitle">Analytics V2</div>
+        </div>
+      </div>
+    </div>
+    <div class="header-right">
+      <nav class="header-nav">
+        <a href="dashboard.html">Dashboard</a>
+        <a href="incidents.html">Incidents</a>
+        <a href="analytics.html"  class="active">Analytics</a>
+        <a href="#" id="createUserBtn" style="display:none;">Add User</a>
+        <a href="#" onclick="handleLogout()" class="logout-link" style="margin-left:12px; color:#EF4444; font-weight:600;"><i class="fa-solid fa-right-from-bracket"></i> Logout</a>
+      </nav>
+      <div style="width:1px;height:28px;background:var(--border-light)"></div>
+      <div class="officer-profile">
+        <div class="officer-avatar">--</div>
+        <div>
+          <div class="officer-name">Loading...</div>
+          <div class="officer-role">Please wait</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Filters Bar (horizontal, matching analytics.html) -->
+  <div class="filters-bar">
+    <div class="filter-group">
+      <label class="filter-label">Date Range</label>
+      <input type="date" class="filter-input" id="dateFrom">
+      <span style="font-size:12px;color:var(--text-muted)">to</span>
+      <input type="date" class="filter-input" id="dateTo">
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">Area</label>
+      <div class="multiselect-wrap" id="areaMultiselect">
+        <div class="multiselect-trigger" onclick="toggleMultiselect('areaMultiselect')">
+          <span class="ms-label">All Areas</span>
+          <i class="fa-solid fa-chevron-down ms-chevron"></i>
+        </div>
+        <div class="multiselect-dropdown">
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-all" checked onchange="handleSelectAll(this)">
+            <label for="area-all">All Areas</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-ibrahimiyah" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-ibrahimiyah">Al-Ibrahimiyah</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-glym" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-glym">Glym</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-mahatit" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-mahatit">Mahatit Al-Raml</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-sidi-bishr" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-sidi-bishr">Sidi Bishr</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-smouha" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-smouha">Smouha</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-corniche" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-corniche">Corniche Road</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-stanley" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-stanley">Stanley</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-montaza" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-montaza">Montaza</label>
+          </div>
+          <div class="multiselect-option">
+            <input type="checkbox" id="area-mandara" class="area-cb" checked onchange="updateAreaLabel()">
+            <label for="area-mandara">Mandara</label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
+  </div>
+
+  <!-- Content -->
+  <main >
+<div class="av2-main">
+    <!-- KPI Cards -->
+    <div class="av2-kpi-row">
+      <div class="av2-kpi-card">
+        <div class="av2-kpi-value">1K</div>
+        <div class="av2-kpi-label">Total Accidents</div>
+      </div>
+      <div class="av2-kpi-card">
+        <div class="av2-kpi-value">32</div>
+        <div class="av2-kpi-label">Average Accidents</div>
+      </div>
+    </div>
+
+    <!-- Charts — 2-row layout -->
+    <div class="av2-charts-grid">
+
+      <!-- Row 1: Total Accidents by Severity (1/3) | Incidents Over Time (2/3) -->
+      <div class="av2-chart-card span-1">
+        <div class="av2-chart-title">Total Accidents by Severity</div>
+        <div class="av2-chart-wrapper">
+          <canvas id="severityChart"></canvas>
+        </div>
+      </div>
+    
+      <div class="av2-chart-card span-2">
+        <div class="av2-chart-title">Incidents Over Time (Last 7 Days)</div>
+        <div class="av2-chart-wrapper">
+          <canvas id="lineChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Row 2: Total Accidents by Sector (2/3) | Total Accidents by Day (1/3) -->
+      <div class="av2-chart-card span-2">
+        <div class="av2-chart-title">Total Accidents by Sector</div>
+        <div class="av2-chart-wrapper">
+          <canvas id="sectorChart"></canvas>
+        </div>
+      </div>
+
+      <div class="av2-chart-card span-1">
+        <div class="av2-chart-title">Total Accidents by Day</div>
+        <div class="av2-chart-wrapper">
+          <canvas id="dayChart"></canvas>
+        </div>
+      </div>
+
+    </div>
+</div>
+  </main>
+</div>
+
+<script src="./chart.js"></script>
+<script src="./analytics.js"></script>
+
+</body>
+</html>

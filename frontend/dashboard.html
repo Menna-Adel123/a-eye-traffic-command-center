@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A-Eye Traffic Command Center — Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="dashboard">
+  <!-- Header -->
+  <header class="header-bar">
+    <div class="header-left">
+      <div class="flex items-center gap-3">
+        <svg width="24" height="24" viewBox="0 0 32 32" fill="none" aria-label="A-Eye Logo">
+          <rect x="2" y="2" width="28" height="28" rx="6" fill="rgba(61,90,254,0.1)" stroke="var(--primary)" stroke-width="1.5"/>
+          <circle cx="16" cy="14" r="5" stroke="var(--primary)" stroke-width="1.8" fill="none"/>
+          <circle cx="16" cy="14" r="1.8" fill="var(--primary)"/>
+          <path d="M8 24 L16 20 L24 24" stroke="var(--primary)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <div class="header-title">A-Eye Traffic Command Center — Alexandria</div>
+          <div class="header-subtitle">Active Events: <span id="activeCount">16</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="header-right">
+      <nav class="header-nav">
+        <a href="dashboard.html" class="active">Dashboard</a>
+        <a href="incidents.html">Incidents</a>
+        <a href="analytics.html">Analytics</a>
+        <a href="#" id="createUserBtn" style="display:none;">Add User</a>
+        <a href="#" onclick="handleLogout()" class="logout-link" style="margin-left:12px; color:#EF4444; font-weight:600;"><i class="fa-solid fa-right-from-bracket"></i> Logout</a>
+      </nav>
+      <div style="width:1px;height:28px;background:var(--border-light)"></div>
+      <div class="officer-profile">
+        <div class="officer-avatar">--</div>
+        <div>
+          <div class="officer-name">Loading...</div>
+          <div class="officer-role">Please wait</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <div class="dashboard-main">
+
+    <!-- LEFT PANEL -->
+    <aside class="panel-left">
+      <div class="panel-title">Notifications & Events</div>
+      <div class="events-list" id="eventsList">
+        <!-- populated by JS -->
+      </div>
+    </aside>
+
+    <!-- CENTER PANEL -->
+    <main class="panel-center">
+      <!-- Map View -->
+      <div class="center-view visible" id="mapView">
+        <div id="mainMap"></div>
+      </div>
+      <!-- Image View -->
+      <div class="center-view hidden" id="imageView">
+        <div class="camera-feed-placeholder" id="centerImage">
+          <div style="text-align:center; opacity:0.3;">
+            <i class="fa-solid fa-video-slash" style="font-size:48px; margin-bottom:12px;"></i>
+            <div style="font-size:14px; font-weight:600;">Incident Video Unavailable</div>
+          </div>
+          <div class="bounding-box">
+            <div class="bounding-box-label">Detection Active</div>
+          </div>
+          <span style="font-size:12px">Camera System — Incident Recording</span>
+          <div class="timestamp-overlay">--</div>
+          <div class="camera-id-overlay">--</div>
+        </div>
+      </div>
+
+  
+    </main>
+
+    <!-- RIGHT PANEL -->
+    <aside class="panel-right" id="rightPanel">
+      <div id="rightContent">
+        <div class="no-selection">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <div style="font-size:14px;font-weight:500;color:var(--text-secondary)">No Incident Selected</div>
+          <div style="font-size:12px">Click an event from the left panel</div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+<script src="./dashboard.js"></script>
+
+</body>
+</html>

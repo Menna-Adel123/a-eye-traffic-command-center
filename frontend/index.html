@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+
+<meta name="generator" content="Perplexity Computer">
+<meta name="author" content="Perplexity Computer">
+<meta property="og:see_also" content="https://www.perplexity.ai/computer">
+<link rel="author" href="https://www.perplexity.ai/computer">
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A-Eye Traffic Command Center — Login</title>
+
+<link rel="stylesheet" href="/fontawesome-free-7.2.0-web/fontawesome-free-7.2.0-web/css/all.min.css">
+<link rel="stylesheet" href="css/style.css">
+
+</head>
+<body>
+
+<div class="login-page">
+  <div class="login-bg">
+    <video class="bg-video" autoplay muted loop playsinline>
+        <source src="/assets/videos/A-eye.mp4" type="video/mp4">
+    </video>
+
+  <div class="login-header">
+    <div class="login-header-logo">
+      <!-- SVG Logo -->
+      <svg width="28" height="28" viewBox="0 0 32 32" fill="none" aria-label="A-Eye Logo">
+        <rect x="2" y="2" width="28" height="28" rx="6" fill="rgba(61,90,254,0.15)" stroke="rgba(255,255,255,0.6)" stroke-width="1.5"/>
+        <circle cx="16" cy="14" r="5" stroke="rgba(255,255,255,0.9)" stroke-width="1.8" fill="none"/>
+        <circle cx="16" cy="14" r="1.8" fill="rgba(61,90,254,0.9)"/>
+        <path d="M8 24 L16 20 L24 24" stroke="rgba(255,255,255,0.6)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="login-header-title">A-Eye Traffic Command Center — Alexandria</span>
+    </div>
+  </div>
+
+  <div class="login-center">
+    <div class="login-card">
+      <div class="login-icon">
+        <div class="icon">
+        
+          <i class="fa-solid fa-circle-user fs-2 text-muted "></i>
+        </div>
+      </div>
+      <h1 class="login-card-title">Traffic Officer Login</h1>
+      <p class="login-card-subtitle">Enter your credentials to access the command center</p>
+
+      <form class="login-form" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label class="form-label" for="serviceId">Service ID</label>
+          <input class="form-input" type="text" id="serviceId" placeholder="Enter your service ID" autocomplete="username" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <input class="form-input" type="password" id="password" placeholder="Enter your password" autocomplete="current-password" required>
+        </div>
+
+        <div class="login-actions">
+          <div class="checkbox-group">
+            <input type="checkbox" id="remember">
+            <label for="remember">Remember me on this device</label>
+          </div>
+          <a href="forgot-password.html" class="forgot-link">Forgot password?</a>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-full btn-lg login-btn">
+          <i class="fa-solid fa-arrow-right-from-bracket"></i>
+          Login to System
+        </button>
+      </form>
+
+      
+    </div>
+  </div>
+
+  
+</div>
+
+<script src="./script.js"></script>
+
+</body>
+</html>

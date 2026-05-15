@@ -1,0 +1,53 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  serviceId    String   @unique
+  email        String?  @unique
+  passwordHash String
+  name         String
+  role         String   @default("officer")
+  station      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+
+  resetCodeHash     String?
+  resetCodeExpiresAt DateTime?
+}
+
+model Incident {
+  id               String    @id @default(uuid())
+  incidentCode     String    @unique // e.g., 'EMG-001'
+  type             String    // 'Accident', 'Traffic Jam', etc.
+  severity         String    // 'low', 'medium', 'high'
+  confidence       Float     // AI confidence score
+  
+  locationName     String
+  latitude         Float
+  longitude        Float
+  
+  camera           String    // e.g., 'Camera_12'
+  videoUrl         String?   // URL path to the stored video file
+  
+  status           String    @default("pending") // 'pending', 'emergency', 'false-alert', 'resolved'
+  
+  detectedAt       DateTime  @default(now())
+  dispatchedAt     DateTime?
+  resolvedAt       DateTime?
+  
+  responseTimeMins Float?
+  
+  // Review fields
+  reviewedBy       String?   // ID or name of the officer who reviewed it
+  reviewedAt       DateTime?
+  vehicleId        String?
+  reviewNotes      String?
+}

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Incident Map</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+  <style>
+    body { margin: 0; }
+    #map { height: 100vh; }
+  </style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const lat = parseFloat(params.get('lat')) || 31.2156;
+  const lng = parseFloat(params.get('lng')) || 29.9553;
+
+
+  const map = L.map('map').setView([lat, lng], 15);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO'
+}).addTo(map);
+
+  L.marker([lat, lng]).addTo(map)
+    .bindPopup("Incident location")
+    .openPopup();
+</script>
+
+</body>
+</html>

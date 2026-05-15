@@ -1,0 +1,25 @@
+{
+    "dbcode.connections": [
+        {
+            "connectionId": "qs-F-fVUCgZ0w6kLvTCz1",
+            "name": "database",
+            "driver": "postgres",
+            "connectionType": "host",
+            "host": "ep-lingering-tooth-ablj06ti.eu-west-2.aws.neon.tech",
+            "port": 5432,
+            "ssl": true,
+            "authMethod": "password",
+            "username": "neondb_owner",
+            "password": "",
+            "savePassword": "secretStorage",
+            "database": "neondb",
+            "readOnly": false,
+            "postConnectionSqlType": "inline",
+            "connectionTimeout": 30,
+            "pinnedConnectionTimeout": "0",
+            "introspection": {
+                "progressive": false
+            }
+        }
+    ]
+}

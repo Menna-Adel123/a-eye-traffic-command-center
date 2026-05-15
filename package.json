@@ -1,0 +1,25 @@
+{
+  "name": "a-eye-traffic-command-center",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "cd backend && npx prisma generate"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "@prisma/client": "^7.8.0",
+    "@prisma/adapter-pg": "^7.8.0",
+    "pg": "^8.20.0",
+    "bcryptjs": "^3.0.3",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^8.0.6",
+    "multer": "^2.1.1",
+    "multer-s3": "^3.0.1",
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "prisma": "^7.8.0"
+  }
+}
