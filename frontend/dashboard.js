@@ -2,6 +2,7 @@ let incidents = [];
 let selectedId = null;
 let centerMode = 'map'; // 'map' or 'image/video'
 let map, markers = {};
+let isFetching = false;
 
 // Authentication check
 const token = localStorage.getItem('token');
@@ -352,6 +353,8 @@ async function handleAction(id, action) {
 
 // ===================== DATA & POLLING =====================
 async function fetchIncidents() {
+  if (isFetching) return;
+  isFetching = true;
   try {
     const res = await fetch('/api/incidents?status=pending,emergency', {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -412,6 +415,8 @@ async function fetchIncidents() {
     }
   } catch (error) {
     console.error('Failed to fetch incidents', error);
+  } finally {
+    isFetching = false;
   }
 }
 
