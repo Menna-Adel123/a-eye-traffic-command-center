@@ -440,6 +440,244 @@ function showCreateUserModal() {
 }
 
   
+// ===================== EXPORT PDF =====================
+async function generatePDF() {
+  const btn = document.getElementById('exportPdfBtn');
+  const originalHTML = btn.innerHTML;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating...';
+  btn.disabled = true;
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 15;
+    const contentW = pageW - margin * 2;
+    let cursorY = margin;
+
+    // --- Header ---
+    pdf.setFillColor(13, 27, 42); // navy
+    pdf.rect(0, 0, pageW, 38, 'F');
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(18);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('A-Eye Traffic Command Center', margin, 16);
+    pdf.setFontSize(11);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text('Analytics Report', margin, 24);
+
+    // Date range
+    const dateFrom = document.getElementById('dateFrom').value || 'N/A';
+    const dateTo = document.getElementById('dateTo').value || 'N/A';
+    pdf.setFontSize(9);
+    pdf.text('Period: ' + dateFrom + '  to  ' + dateTo, margin, 32);
+
+    // Generated timestamp on right
+    const now = new Date();
+    const timestamp = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) +
+      ' at ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    pdf.setFontSize(8);
+    pdf.text('Generated: ' + timestamp, pageW - margin, 32, { align: 'right' });
+
+    cursorY = 46;
+
+    // --- KPI Cards ---
+    const kpiValues = document.querySelectorAll('.av2-kpi-value');
+    const kpiLabels = document.querySelectorAll('.av2-kpi-label');
+    const kpis = [];
+    kpiValues.forEach((el, i) => {
+      kpis.push({ value: el.textContent.trim(), label: kpiLabels[i]?.textContent.trim() || '' });
+    });
+
+    const kpiCardW = (contentW - 10) / 2;
+    const kpiCardH = 22;
+
+    kpis.forEach((kpi, i) => {
+      const x = margin + i * (kpiCardW + 10);
+
+      // Card background
+      pdf.setFillColor(245, 247, 250);
+      pdf.roundedRect(x, cursorY, kpiCardW, kpiCardH, 3, 3, 'F');
+
+      // Value
+      pdf.setTextColor(31, 41, 51);
+      pdf.setFontSize(16);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(kpi.value, x + kpiCardW / 2, cursorY + 10, { align: 'center' });
+
+      // Label
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(100, 111, 124);
+      pdf.text(kpi.label, x + kpiCardW / 2, cursorY + 18, { align: 'center' });
+    });
+
+    cursorY += kpiCardH + 12;
+
+    // --- Chart capture helper ---
+    async function captureChart(canvasId, title, x, y, w, h) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return y;
+
+      // Section title
+      pdf.setTextColor(31, 41, 51);
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(title, x, y);
+      y += 5;
+
+      // Capture chart as image
+      const chartCanvas = await html2canvas(canvas.parentElement, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        logging: false,
+      });
+      const imgData = chartCanvas.toDataURL('image/png');
+
+      const imgAspect = chartCanvas.height / chartCanvas.width;
+      const imgH = w * imgAspect;
+
+      // Check if we need a new page
+      if (y + imgH > pageH - margin) {
+        pdf.addPage();
+        y = margin;
+      }
+
+      // White card background with border
+      pdf.setFillColor(255, 255, 255);
+      pdf.setDrawColor(224, 228, 236);
+      pdf.roundedRect(x, y, w, imgH + 4, 3, 3, 'FD');
+
+      pdf.addImage(imgData, 'PNG', x + 2, y + 2, w - 4, imgH);
+
+      return y + imgH + 12;
+    }
+
+    // --- Row 1: Severity (left 1/3) + Over Time (right 2/3) ---
+    const col1W = (contentW - 8) * 0.35;
+    const col2W = (contentW - 8) * 0.65;
+
+    // Capture both charts side by side
+    const sevY = await captureChart('severityChart', 'Total Accidents by Severity', margin, cursorY, col1W, 60);
+    const lineY = await captureChart('lineChart', 'Incidents Over Time (Last 7 Days)', margin + col1W + 8, cursorY, col2W, 60);
+
+    cursorY = Math.max(sevY, lineY);
+
+    // --- Row 2: Sector (left 2/3) + Day (right 1/3) ---
+    // Check if we need a new page
+    if (cursorY + 70 > pageH - margin) {
+      pdf.addPage();
+      cursorY = margin;
+    }
+
+    const sectorY = await captureChart('sectorChart', 'Total Accidents by Sector', margin, cursorY, col2W, 60);
+    const dayY = await captureChart('dayChart', 'Total Accidents by Day', margin + col2W + 8, cursorY, col1W, 60);
+
+    cursorY = Math.max(sectorY, dayY);
+
+    // --- Summary Table ---
+    if (cursorY + 50 > pageH - margin) {
+      pdf.addPage();
+      cursorY = margin;
+    }
+
+    pdf.setTextColor(31, 41, 51);
+    pdf.setFontSize(11);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('Summary Breakdown', margin, cursorY);
+    cursorY += 6;
+
+    // Build severity summary from current data
+    const sevCounts = { high: 0, medium: 0, low: 0 };
+    const currentData = tableData.length ? tableData : [];
+    currentData.forEach(i => { if (sevCounts.hasOwnProperty(i.severity)) sevCounts[i.severity]++; });
+
+    // Table header
+    pdf.setFillColor(13, 27, 42);
+    pdf.roundedRect(margin, cursorY, contentW, 8, 2, 2, 'F');
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(8);
+    pdf.setFont('helvetica', 'bold');
+    const cols = ['Severity', 'Count', '% of Total'];
+    const colWidths = [contentW * 0.4, contentW * 0.3, contentW * 0.3];
+    let cx = margin + 4;
+    cols.forEach((col, i) => {
+      pdf.text(col, cx, cursorY + 5.5);
+      cx += colWidths[i];
+    });
+    cursorY += 8;
+
+    // Table rows
+    const total = sevCounts.high + sevCounts.medium + sevCounts.low;
+    const rows = [
+      { label: 'High', count: sevCounts.high, color: [229, 57, 53] },
+      { label: 'Medium', count: sevCounts.medium, color: [255, 179, 0] },
+      { label: 'Low', count: sevCounts.low, color: [22, 199, 154] },
+    ];
+
+    rows.forEach((row, i) => {
+      const rowY = cursorY + i * 9;
+      // Alternating row bg
+      if (i % 2 === 0) {
+        pdf.setFillColor(248, 249, 252);
+        pdf.rect(margin, rowY, contentW, 9, 'F');
+      }
+
+      // Severity color dot
+      pdf.setFillColor(row.color[0], row.color[1], row.color[2]);
+      pdf.circle(margin + 7, rowY + 4.5, 2.2, 'F');
+
+      pdf.setTextColor(31, 41, 51);
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'normal');
+      let tx = margin + 14;
+      pdf.text(row.label, tx, rowY + 6);
+      tx = margin + 4 + colWidths[0];
+      pdf.text(String(row.count), tx, rowY + 6);
+      tx += colWidths[1];
+      const pct = total > 0 ? ((row.count / total) * 100).toFixed(1) + '%' : '0%';
+      pdf.text(pct, tx, rowY + 6);
+    });
+
+    cursorY += rows.length * 9 + 8;
+
+    // --- Footer ---
+    const footerY = pageH - 8;
+    pdf.setDrawColor(224, 228, 236);
+    pdf.line(margin, footerY - 4, pageW - margin, footerY - 4);
+    pdf.setFontSize(7);
+    pdf.setTextColor(140, 140, 140);
+    pdf.setFont('helvetica', 'italic');
+    pdf.text('A-Eye Traffic Command Center - Confidential Analytics Report', margin, footerY);
+    pdf.text('Page 1 of ' + pdf.internal.getNumberOfPages(), pageW - margin, footerY, { align: 'right' });
+
+    // Add footer to all pages
+    const totalPages = pdf.internal.getNumberOfPages();
+    for (let p = 2; p <= totalPages; p++) {
+      pdf.setPage(p);
+      pdf.setDrawColor(224, 228, 236);
+      pdf.line(margin, footerY - 4, pageW - margin, footerY - 4);
+      pdf.setFontSize(7);
+      pdf.setTextColor(140, 140, 140);
+      pdf.setFont('helvetica', 'italic');
+      pdf.text('A-Eye Traffic Command Center - Confidential Analytics Report', margin, footerY);
+      pdf.text('Page ' + p + ' of ' + totalPages, pageW - margin, footerY, { align: 'right' });
+    }
+
+    // Save
+    const fileName = 'A-Eye_Analytics_Report_' + dateFrom + '_to_' + dateTo + '.pdf';
+    pdf.save(fileName);
+
+  } catch (error) {
+    console.error('PDF generation failed:', error);
+    alert('Failed to generate PDF. Please try again.');
+  } finally {
+    btn.innerHTML = originalHTML;
+    btn.disabled = false;
+  }
+}
+  
 // ===================== LOGOUT =====================
 async function handleLogout() {
   try {
