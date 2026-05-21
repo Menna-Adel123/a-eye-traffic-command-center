@@ -204,7 +204,7 @@ function initCharts(data) {
         datasets: [{
           label: 'Incidents',
           data: sectorValues,
-          backgroundColor: '#3d5afe',
+          backgroundColor: '#E53935',
           borderRadius: 4,
         }],
       },
