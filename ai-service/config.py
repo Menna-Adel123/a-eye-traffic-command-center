@@ -40,7 +40,7 @@ LOG_DIR = os.getenv("LOG_DIR", "logs")
 
 BACKEND_WEBHOOK_URL = os.getenv(
     "BACKEND_WEBHOOK_URL",
-    "http://localhost:5000/api/webhooks/ai-detection",
+    "https://a-eye-traffic-command-center-ten.vercel.app/api/webhooks/ai-detection",
 )
 AI_WEBHOOK_SECRET = os.getenv("AI_WEBHOOK_SECRET", "")
 WEBHOOK_TIMEOUT_SECONDS = float(os.getenv("WEBHOOK_TIMEOUT_SECONDS", "5"))
