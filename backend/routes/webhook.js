@@ -25,8 +25,42 @@ try {
   upload = multer({ storage: multer.memoryStorage() });
 }
 
-// POST /api/webhooks/ai-detection
-router.post('/ai-detection', (req, res, next) => {
+const normalizeSeverity = (value) => {
+  const severity = String(value || 'low').toLowerCase();
+  if (['low', 'medium', 'high'].includes(severity)) return severity;
+  return 'low';
+};
+
+const parseNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const buildIncidentCode = () => {
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `AI-${timestamp}-${suffix}`;
+};
+
+const verifySharedSecret = (req, res) => {
+  const expectedSecret = process.env.AI_WEBHOOK_SECRET;
+  if (!expectedSecret) return true;
+
+  const receivedSecret = req.get('x-ai-webhook-secret');
+  if (receivedSecret !== expectedSecret) {
+    res.status(401).json({
+      success: false,
+      error: 'Invalid or missing AI webhook secret'
+    });
+    return false;
+  }
+
+  return true;
+};
+
+const uploadVideoIfMultipart = (req, res, next) => {
+  if (!req.is('multipart/form-data')) return next();
+
   upload.single('video')(req, res, (err) => {
     if (err) {
       console.warn('File upload failed, continuing without video:', err.message);
@@ -34,42 +68,84 @@ router.post('/ai-detection', (req, res, next) => {
     }
     next();
   });
-}, async (req, res) => {
+};
+
+const getUploadedVideoUrl = (req) => {
+  if (!req.file) return null;
+
+  if (process.env.S3_PUBLIC_URL) {
+    return `${process.env.S3_PUBLIC_URL}/${req.file.key}`;
+  }
+
+  return `http://${process.env.MINIO_ENDPOINT || 'localhost'}:${process.env.MINIO_PORT || 9000}/${BUCKET_NAME}/${req.file.key}`;
+};
+
+// POST /api/webhooks/ai-detection
+router.post('/ai-detection', uploadVideoIfMultipart, async (req, res) => {
   try {
-    const { incidentCode, type, severity, confidence, locationName, latitude, longitude, camera } = req.body;
-    
-    // Validate required fields
-    if (!incidentCode || !type || !latitude || !longitude) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!verifySharedSecret(req, res)) return;
+
+    const body = req.body || {};
+    const metadata = typeof body.metadata === 'string'
+      ? JSON.parse(body.metadata || '{}')
+      : (body.metadata || {});
+
+    const latitude = parseNumber(body.latitude);
+    const longitude = parseNumber(body.longitude);
+    const confidence = parseNumber(body.confidence);
+
+    const errors = [];
+    if (!body.type) errors.push('type is required');
+    if (latitude === null) errors.push('latitude must be a valid number');
+    if (longitude === null) errors.push('longitude must be a valid number');
+    if (confidence === null) errors.push('confidence must be a valid number');
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        details: errors
+      });
     }
 
-    // Build the public URL for the uploaded video
-    const videoUrl = req.file
-      ? (process.env.S3_PUBLIC_URL 
-          ? `${process.env.S3_PUBLIC_URL}/${req.file.key}` 
-          : `http://${process.env.MINIO_ENDPOINT || 'localhost'}:${process.env.MINIO_PORT || 9000}/${BUCKET_NAME}/${req.file.key}`)
-      : null;
+    const uploadedVideoUrl = getUploadedVideoUrl(req);
+    const incomingMediaUrl = body.videoUrl || body.snapshotUrl || body.snapshotPath || metadata.snapshot_path || null;
+    const detectedAt = body.detectedAt ? new Date(body.detectedAt) : new Date();
 
     const newIncident = await prisma.incident.create({
       data: {
-        incidentCode,
-        type,
-        severity: severity || 'low',
-        confidence: parseFloat(confidence) || 0,
-        locationName: locationName || 'Unknown',
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-        camera: camera || 'Unknown',
-        videoUrl,
-        status: 'pending'
+        incidentCode: body.incidentCode || buildIncidentCode(),
+        type: body.type,
+        severity: normalizeSeverity(body.severity),
+        confidence,
+        locationName: body.locationName || 'Unknown',
+        latitude,
+        longitude,
+        camera: body.camera || 'Unknown',
+        videoUrl: uploadedVideoUrl || incomingMediaUrl,
+        status: 'pending',
+        detectedAt: Number.isNaN(detectedAt.getTime()) ? new Date() : detectedAt
       }
     });
 
-
-    res.status(201).json({ success: true, incident: newIncident });
+    res.status(201).json({
+      success: true,
+      message: 'AI detection received and incident created',
+      incident: newIncident
+    });
   } catch (error) {
+    if (error && error.code === 'P2002') {
+      return res.status(409).json({
+        success: false,
+        error: 'Duplicate incidentCode'
+      });
+    }
+
     console.error('Webhook error:', error);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
   }
 });
 

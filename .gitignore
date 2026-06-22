@@ -8,3 +8,9 @@ backend/.env
 *.log
 .vercel
 .env*.local
+ai-service/.venv/
+ai-service/venv/
+ai-service/__pycache__/
+ai-service/logs/
+ai-service/accidents/
+ai-service/clips/
