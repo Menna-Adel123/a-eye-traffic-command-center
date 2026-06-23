@@ -62,8 +62,8 @@ function getSeverityLabel(sev) {
 
 function getStatusStyle(status) {
   const styles = {
-    pending:   { bg: 'rgba(61, 90, 254, 0.12)', color: '#3D5AFE' },
-    emergency: { bg: 'rgba(183, 28, 12, 0.12)', color: '#B71C0C' },
+    pending:   { bg: 'rgba(229, 57, 53, 0.10)', color: '#E53935' },
+    emergency: { bg: 'rgba(100, 111, 124, 0.10)', color: '#646F7C' },
   };
   return styles[status] || { bg: '#eee', color: '#666' };
 }
