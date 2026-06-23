@@ -558,9 +558,29 @@ h1, h2, h3, h4, h5, h6 {
     background: var(--bg);
   }
 
+  .event-card.status-pending:hover {
+    background: rgba(61, 90, 254, 0.06);
+    border-color: rgba(61, 90, 254, 0.18);
+  }
+
+  .event-card.status-emergency:hover {
+    background: rgba(183, 28, 12, 0.06);
+    border-color: rgba(183, 28, 12, 0.18);
+  }
+
   .event-card.selected {
     background: rgba(61, 90, 254, 0.06);
     border-color: rgba(61, 90, 254, 0.2);
+  }
+
+  .event-card.status-pending.selected {
+    background: rgba(61, 90, 254, 0.08);
+    border-color: rgba(61, 90, 254, 0.25);
+  }
+
+  .event-card.status-emergency.selected {
+    background: rgba(183, 28, 12, 0.08);
+    border-color: rgba(183, 28, 12, 0.25);
   }
 
   .event-card .severity-stripe {
