@@ -37,9 +37,8 @@ except ImportError:
 # CONFIG  (edit here only)
 # ------------------------------------------------------------------
 MODEL_PATH    = "models/best.pt"
-USE_CAMERA    = False
+USE_CAMERA    = True
 VIDEO_PATH    = "videos/acc_alex2.mp4"
-
 LOCATION      = "Alexandria - Corniche (Bibliotheca Area)"
 
 SNAP_COOLDOWN = 10        # seconds between snapshots
@@ -179,7 +178,7 @@ def log_accident(total: int, severity: str, priority: str, snap_path: str, video
 # ------------------------------------------------------------------
 def main():
     model  = YOLO(MODEL_PATH)
-    source = 0 if USE_CAMERA else VIDEO_PATH
+    source = 1 if USE_CAMERA else VIDEO_PATH
     cap    = cv2.VideoCapture(source)
 
     if not cap.isOpened():
