@@ -549,13 +549,41 @@ h1, h2, h3, h4, h5, h6 {
     padding: 10px 12px;
     border-radius: var(--radius-md);
     cursor: pointer;
-    transition: background var(--transition);
+    transition: background var(--transition), border-color var(--transition);
     border: 1px solid transparent;
     margin-bottom: 2px;
+    position: relative;
+  }
+
+  /* Pending = needs action — subtle red/urgent tint */
+  .event-card.status-pending {
+    background: rgba(229, 57, 53, 0.05);
+  }
+
+  /* Emergency = action taken — clean white, no decoration */
+
+  /* Hover — status-aware, no border */
+  .event-card.status-pending:hover {
+    background: rgba(229, 57, 53, 0.08);
+  }
+
+  .event-card.status-emergency:hover {
+    background: rgba(100, 111, 124, 0.06);
   }
 
   .event-card:hover {
-    background: var(--bg);
+    background: var(--surface-hover);
+  }
+
+  /* Selected — status-aware, with border */
+  .event-card.status-pending.selected {
+    background: rgba(229, 57, 53, 0.08);
+    border-color: rgba(229, 57, 53, 0.25);
+  }
+
+  .event-card.status-emergency.selected {
+    background: rgba(100, 111, 124, 0.06);
+    border-color: rgba(100, 111, 124, 0.2);
   }
 
   .event-card.selected {

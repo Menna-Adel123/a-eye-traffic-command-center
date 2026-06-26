@@ -60,6 +60,14 @@ function getSeverityLabel(sev) {
   return sev.charAt(0).toUpperCase() + sev.slice(1);
 }
 
+function getStatusStyle(status) {
+  const styles = {
+    pending:   { bg: 'rgba(229, 57, 53, 0.10)', color: '#E53935' },
+    emergency: { bg: 'rgba(100, 111, 124, 0.10)', color: '#646F7C' },
+  };
+  return styles[status] || { bg: '#eee', color: '#666' };
+}
+
 // ===================== EVENTS LIST =====================
 function renderEvents() {
   const list = document.getElementById('eventsList');
@@ -69,10 +77,10 @@ function renderEvents() {
   list.innerHTML = incidents.map(inc => {
     const timeStr = new Date(inc.detectedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
     return `
-      <div class="event-card ${selectedId === inc.incidentCode ? 'selected' : ''}" onclick="selectIncident('${inc.incidentCode}')" data-id="${inc.incidentCode}">
+      <div class="event-card status-${inc.status} ${selectedId === inc.incidentCode ? 'selected' : ''}" onclick="selectIncident('${inc.incidentCode}')" data-id="${inc.incidentCode}">
         <div class="severity-stripe" style="background:${getSeverityColor(inc.severity)}"></div>
         <div class="event-card-content">
-          <div class="event-code">${inc.incidentCode} <span style="float:right; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #eee">${inc.status}</span></div>
+          <div class="event-code">${inc.incidentCode} <span style="float:right; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: ${getStatusStyle(inc.status).bg}; color: ${getStatusStyle(inc.status).color}; font-weight: 600;">${inc.status}</span></div>
           <div class="event-label">${inc.type} — <span style="color:${getSeverityColor(inc.severity)};font-weight:600">${getSeverityLabel(inc.severity)}</span></div>
           <div class="event-meta">${timeStr} — ${inc.locationName}</div>
         </div>
