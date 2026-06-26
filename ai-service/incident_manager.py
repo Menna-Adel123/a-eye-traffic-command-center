@@ -541,12 +541,18 @@ class IncidentManager:
     def _save_video_clip(self, frames: List, filename: Path) -> bool:
         """Save collected frames as an MP4 clip with ffmpeg transcode."""
         if not frames:
+            print(f"[CLIP ERROR] No frames to save for {filename}")
             logging.error("No frames to save for clip %s", filename)
             return False
 
         try:
             h, w = frames[0].shape[:2]
+            print(
+                f"[CLIP] Saving {len(frames)} frames "
+                f"({w}x{h} @ {self.fps:.1f}fps) → {filename}"
+            )
             if w <= 0 or h <= 0:
+                print(f"[CLIP ERROR] Invalid frame dimensions: {w}x{h}")
                 logging.error("Invalid frame dimensions for clip %s", filename)
                 return False
 
@@ -566,6 +572,7 @@ class IncidentManager:
                     (int(w), int(h)),
                 )
                 if not writer.isOpened():
+                    print(f"[CLIP ERROR] VideoWriter failed to open: {temp_path}")
                     logging.error(
                         "VideoWriter failed to open: %s", temp_path
                     )
@@ -576,46 +583,88 @@ class IncidentManager:
                 writer.release()
 
                 if not temp_path.exists() or temp_path.stat().st_size == 0:
+                    print(f"[CLIP ERROR] Temp clip is empty: {temp_path}")
                     logging.error("Temp clip is empty: %s", temp_path)
                     return False
 
-                # Transcode for browser compatibility
-                ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(temp_path),
-                    "-vf",
-                    "format=yuv420p,"
-                    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-crf",
-                    "23",
-                    "-movflags",
-                    "+faststart",
-                    str(filename),
-                ]
-                result = subprocess.run(
-                    ffmpeg_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
+                temp_size = temp_path.stat().st_size
+                print(
+                    f"[CLIP] Raw clip written: {temp_path} "
+                    f"({temp_size / 1024:.0f} KB)"
                 )
-                if result.returncode != 0:
-                    logging.warning(
-                        "ffmpeg transcode failed for %s, using raw mp4v: %s",
-                        filename,
-                        result.stderr[-500:],
+
+                # Transcode for browser compatibility (ffmpeg optional)
+                transcoded = False
+                try:
+                    ffmpeg_cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        str(temp_path),
+                        "-vf",
+                        "format=yuv420p,"
+                        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-crf",
+                        "23",
+                        "-movflags",
+                        "+faststart",
+                        str(filename),
+                    ]
+                    result = subprocess.run(
+                        ffmpeg_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                     )
+                    if result.returncode == 0:
+                        transcoded = True
+                        print(f"[CLIP] ffmpeg transcode OK → {filename}")
+                    else:
+                        print(
+                            f"[CLIP WARNING] ffmpeg transcode failed "
+                            f"(rc={result.returncode}), using raw copy"
+                        )
+                        logging.warning(
+                            "ffmpeg transcode failed for %s: %s",
+                            filename,
+                            result.stderr[-500:],
+                        )
+                except FileNotFoundError:
+                    print(
+                        "[CLIP WARNING] ffmpeg not installed, "
+                        "saving raw mp4v clip (may not play in browsers)"
+                    )
+                    logging.warning(
+                        "ffmpeg not found, using raw mp4v for %s", filename
+                    )
+                except Exception as ffmpeg_exc:
+                    print(
+                        f"[CLIP WARNING] ffmpeg error: {ffmpeg_exc}, "
+                        f"using raw copy"
+                    )
+                    logging.warning(
+                        "ffmpeg error for %s: %s", filename, ffmpeg_exc
+                    )
+
+                # Fallback: copy raw file if transcode didn't produce output
+                if not transcoded:
                     shutil.copy2(str(temp_path), str(filename))
+                    print(f"[CLIP] Raw copy saved → {filename}")
 
                 if not filename.exists() or filename.stat().st_size == 0:
+                    print(f"[CLIP ERROR] Final clip is empty: {filename}")
                     logging.error("Final clip is empty: %s", filename)
                     return False
 
+                final_size = filename.stat().st_size
+                print(
+                    f"[CLIP] Final clip: {final_size / 1024:.0f} KB "
+                    f"({'transcoded' if transcoded else 'raw mp4v'})"
+                )
                 return True
 
             finally:
@@ -626,6 +675,7 @@ class IncidentManager:
                         pass
 
         except Exception as exc:
+            print(f"[CLIP ERROR] Video save error for {filename}: {exc}")
             logging.exception(
                 "Video save error for %s: %s", filename, exc
             )
