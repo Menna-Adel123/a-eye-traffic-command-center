@@ -135,6 +135,21 @@ router.post('/ai-detection', uploadVideoIfMultipart, async (req, res) => {
     });
   } catch (error) {
     if (error && error.code === 'P2002') {
+      const incidentCode = req.body && req.body.incidentCode;
+      if (incidentCode) {
+        const existingIncident = await prisma.incident.findUnique({
+          where: { incidentCode }
+        });
+
+        if (existingIncident) {
+          return res.status(200).json({
+            success: true,
+            message: 'AI detection already received',
+            incident: existingIncident
+          });
+        }
+      }
+
       return res.status(409).json({
         success: false,
         error: 'Duplicate incidentCode'
