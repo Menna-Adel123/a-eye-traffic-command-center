@@ -5,15 +5,60 @@ import csv
 import logging
 import os
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
+
+from config import (
+    ACCIDENT_CLASS_KEYWORDS,
+    ACCIDENT_CONF_THRESHOLD,
+    ACCIDENT_MODEL_PATH,
+    AI_WEBHOOK_SECRET,
+    BACKEND_WEBHOOK_URL,
+    CAMERA_ID,
+    CAMERA_SOURCE,
+    CLIP_DIR,
+    CLIP_SECONDS_AFTER,
+    CLIP_SECONDS_BEFORE,
+    CONTACT_DISTANCE_THRESHOLD,
+    CONTACT_IOU_THRESHOLD,
+    DEBUG_OVERLAY,
+    DETECTION_IMAGE_SIZE,
+    DIST_HIGH,
+    DIST_MEDIUM,
+    LATITUDE,
+    LOCATION_NAME,
+    LOG_DIR,
+    LONGITUDE,
+    MIN_VEHICLE_CONFIDENCE,
+    MOVEMENT_HISTORY_FRAMES,
+    MOVEMENT_STOP_THRESHOLD,
+    NMS_IOU_THRESHOLD,
+    OUTPUT_DIR,
+    PROTOTYPE_MODE,
+    REQUIRED_CONTACT_FRAMES,
+    SNAP_COOLDOWN,
+    TRACK_CONTACT_MISSED_TOLERANCE,
+    TRACK_MATCH_DISTANCE,
+    TRACK_MAX_MISSED,
+    USE_CAMERA,
+    VEHICLE_CLASSES,
+    VEHICLE_CONFIDENCE,
+    VEHICLE_MODEL_PATH,
+    VIDEO_PATH,
+    WEBHOOK_COOLDOWN,
+    WEBHOOK_MAX_RETRIES,
+    WEBHOOK_RETRY_BACKOFF_SECONDS,
+    WEBHOOK_TIMEOUT_SECONDS,
+)
+from webhook_client import DetectionWebhookClient
 
 # ------------------------------------------------------------------
 # CROSS-PLATFORM ALARM
@@ -37,54 +82,18 @@ except ImportError:
                 sys.stdout.flush()
             time.sleep(0.1)
 
+
 # ------------------------------------------------------------------
-# CONFIG  (edit here only)
+# CONFIG
 # ------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent
-VEHICLE_MODEL_PATH = BASE_DIR / "models" / "yolov8n.pt"
-ACCIDENT_MODEL_PATH = BASE_DIR / "models" / "best.pt"
-
-USE_CAMERA = True
-VIDEO_PATH = BASE_DIR / "videos" / "acc_alex2.mp4"
-LOCATION = "Alexandria - Corniche (Bibliotheca Area)"
-
-VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
-VEHICLE_CONFIDENCE = 0.20
-DETECTION_IMAGE_SIZE = 960
-MIN_VEHICLE_CONFIDENCE = 0.15
-PROTOTYPE_MODE = True
-DEBUG_OVERLAY = True
-CONTACT_IOU_THRESHOLD = 0.01
-CONTACT_DISTANCE_THRESHOLD = 45
-REQUIRED_CONTACT_FRAMES = 2
-ALERT_COOLDOWN_SECONDS = 8
-CONTACT_CLEAR_FRAMES = 10
-
-ACCIDENT_CONF_THRESHOLD = 0.35
-NMS_IOU_THRESHOLD = 0.45
-ACCIDENT_CLASS_KEYWORDS = ("accident", "crash", "collision")
-TRACK_MATCH_DISTANCE = 140
-TRACK_MAX_MISSED = 8
-TRACK_CONTACT_MISSED_TOLERANCE = 3
-MOVEMENT_STOP_THRESHOLD = 5.0
-MOVEMENT_HISTORY_FRAMES = 5
-
-SNAP_COOLDOWN = 10        # seconds between snapshots
-DIST_HIGH = 25            # px threshold for HIGH severity (prototype)
-DIST_MEDIUM = 45          # px threshold for MEDIUM severity (prototype)
-
-VIDEO_PRE_SEC = 2         # seconds to keep before accident
-VIDEO_POST_SEC = 2        # seconds to record after accident
-
-OUTPUT_DIR = BASE_DIR / "accidents"
-LOG_DIR = BASE_DIR / "logs"
-
+LOCATION = LOCATION_NAME
 VEHICLE_CONFIDENCE = max(float(VEHICLE_CONFIDENCE), MIN_VEHICLE_CONFIDENCE)
 
 # ------------------------------------------------------------------
 # SETUP
 # ------------------------------------------------------------------
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+CLIP_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -94,13 +103,14 @@ csv_file = LOG_DIR / f"session_{_session_ts}.csv"
 logging.basicConfig(
     filename=str(log_file),
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
 with csv_file.open("w", newline="") as _f:
     csv.writer(_f).writerow(
         ["#", "Date", "Time", "Location", "Severity", "Priority", "Snapshot", "Video_Clip"]
     )
+
 
 # ------------------------------------------------------------------
 # HELPERS
@@ -154,14 +164,13 @@ def calculate_severity_from_vehicle(box, confidence_or_frames):
     return "LOW", "MINOR", (0, 255, 0)
 
 
-
-
 def calculate_prototype_severity(center_distance):
-    if center_distance < 25:
+    if center_distance < DIST_HIGH:
         return "HIGH", "CRITICAL", (0, 0, 255)
-    if center_distance < 45:
+    if center_distance < DIST_MEDIUM:
         return "MEDIUM", "WARNING", (0, 165, 255)
     return "LOW", "MINOR", (0, 255, 0)
+
 
 def make_hyperlink(path: Path) -> str:
     abs_path = path.resolve().as_posix()
@@ -172,19 +181,77 @@ def play_alarm():
     threading.Thread(target=_play_beep, daemon=True).start()
 
 
-def save_video_clip(pre_frames, post_frames, filename, fps, width, height):
-    # runs in a background thread so it doesn't block the main loop
+def save_video_clip(pre_frames, post_frames, filename: Path, fps, width, height) -> bool:
+    frames = list(pre_frames) + list(post_frames)
+    if not frames:
+        logging.error("Video clip not saved: no frames were provided.")
+        return False
+
     try:
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(str(filename), fourcc, fps, (width, height))
-        for f in pre_frames:
-            out.write(f)
-        for f in post_frames:
-            out.write(f)
-        out.release()
-        logging.info(f"Video clip saved: {filename}")
-    except Exception as e:
-        logging.error(f"Video save error: {e}")
+        if width <= 0 or height <= 0:
+            height, width = frames[0].shape[:2]
+
+        filename.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+            temp_path = Path(tmp_file.name)
+
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            out = cv2.VideoWriter(str(temp_path), fourcc, float(fps), (int(width), int(height)))
+            if not out.isOpened():
+                logging.error("Video clip not saved: VideoWriter could not open %s", temp_path)
+                return False
+
+            for frame in frames:
+                out.write(frame)
+            out.release()
+
+            if not temp_path.exists() or temp_path.stat().st_size == 0:
+                logging.error("Video clip not saved: temp output is empty: %s", temp_path)
+                return False
+
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(temp_path),
+                "-vf",
+                "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "23",
+                "-movflags",
+                "+faststart",
+                str(filename),
+            ]
+            result = subprocess.run(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if result.returncode != 0:
+                logging.error("Video transcode failed for %s: %s", filename, result.stderr[-1000:])
+                return False
+
+            if not filename.exists() or filename.stat().st_size == 0:
+                logging.error("Video clip not saved: output file is empty: %s", filename)
+                return False
+
+            logging.info("Video clip saved: %s", filename)
+            return True
+        finally:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+    except Exception as exc:
+        logging.exception("Video save error: %s", exc)
+        return False
 
 
 _last_terminal_key = None
@@ -222,11 +289,11 @@ def print_terminal(accident_detected: bool, vehicle_count: int, contact_frames: 
     try:
         print("\n".join(lines))
     except OSError as exc:
-        logging.warning(f"Terminal print skipped: {exc}")
+        logging.warning("Terminal print skipped: %s", exc)
 
 
 def log_accident(total: int, severity: str, priority: str, snap_path: Path, video_path: Path):
-    logging.warning(f"ACCIDENT | {severity} | {priority} | {snap_path}")
+    logging.warning("ACCIDENT | %s | %s | %s", severity, priority, snap_path)
     with csv_file.open("a", newline="") as f:
         csv.writer(f).writerow([
             total,
@@ -421,8 +488,12 @@ def average_movement(track):
     return float(np.mean(movements))
 
 
-def evaluate_prototype_contacts(tracks, contact_counts, contact_missed_counts, last_alert_times):
-    active_track_ids = [track_id for track_id, track in tracks.items() if track.get("missed", 0) <= TRACK_CONTACT_MISSED_TOLERANCE]
+def evaluate_prototype_contacts(tracks, contact_counts, contact_missed_counts):
+    active_track_ids = [
+        track_id
+        for track_id, track in tracks.items()
+        if track.get("missed", 0) <= TRACK_CONTACT_MISSED_TOLERANCE
+    ]
     active_pairs = set()
     best_pair = None
     debug_info = {
@@ -441,7 +512,6 @@ def evaluate_prototype_contacts(tracks, contact_counts, contact_missed_counts, l
         "track_ids": list(active_track_ids),
     }
     max_contact_frames = 0
-    now = time.time()
 
     for i, track_id_1 in enumerate(active_track_ids):
         for track_id_2 in active_track_ids[i + 1:]:
@@ -456,7 +526,6 @@ def evaluate_prototype_contacts(tracks, contact_counts, contact_missed_counts, l
             center_distance = float(np.hypot(center_1[0] - center_2[0], center_1[1] - center_2[1]))
             movement_1 = average_movement(track_1)
             movement_2 = average_movement(track_2)
-            # PROTOTYPE_MODE: contact if IoU >= threshold OR center distance <= threshold
             contact_condition = iou >= CONTACT_IOU_THRESHOLD or center_distance <= CONTACT_DISTANCE_THRESHOLD
             minimal_movement = movement_1 <= MOVEMENT_STOP_THRESHOLD and movement_2 <= MOVEMENT_STOP_THRESHOLD
             pair = tuple(sorted((track_id_1, track_id_2)))
@@ -464,14 +533,12 @@ def evaluate_prototype_contacts(tracks, contact_counts, contact_missed_counts, l
             if contact_condition:
                 active_pairs.add(pair)
                 contact_counts[pair] = contact_counts.get(pair, 0) + 1
-                contact_missed_counts[pair] = 0  # reset missed counter
+                contact_missed_counts[pair] = 0
             else:
-                # Tolerance: only reset after TRACK_CONTACT_MISSED_TOLERANCE consecutive misses
                 contact_missed_counts[pair] = contact_missed_counts.get(pair, 0) + 1
                 if contact_missed_counts[pair] > TRACK_CONTACT_MISSED_TOLERANCE:
                     contact_counts[pair] = 0
                 else:
-                    # Keep the pair alive — don't reset the contact counter
                     active_pairs.add(pair)
 
             frames = contact_counts.get(pair, 0)
@@ -492,12 +559,11 @@ def evaluate_prototype_contacts(tracks, contact_counts, contact_missed_counts, l
                     "contact_condition": contact_condition,
                     "minimal_movement": minimal_movement,
                     "threshold_reached": threshold_reached,
-                    "accident_detected": False,  # updated below
+                    "accident_detected": False,
                     "active_tracks": len(active_track_ids),
                     "track_ids": list(active_track_ids),
                 }
 
-            # Trigger accident when contact frames reach the required threshold
             if contact_condition and threshold_reached:
                 if best_pair is None or frames > best_pair["frames"]:
                     best_pair = {
@@ -508,13 +574,11 @@ def evaluate_prototype_contacts(tracks, contact_counts, contact_missed_counts, l
                         "debug": debug_info.copy(),
                     }
 
-    # Clean up pairs that are no longer active (after tolerance)
     for pair in list(contact_counts.keys()):
         if pair not in active_pairs:
             contact_counts[pair] = 0
             contact_missed_counts.pop(pair, None)
 
-    # Explicitly set accident_detected = True when threshold is reached
     accident_detected = best_pair is not None
     accident_track_ids = set(best_pair["pair"]) if best_pair else set()
     if best_pair:
@@ -531,7 +595,6 @@ def merge_boxes(box_1, box_2):
         max(box_1[2], box_2[2]),
         max(box_1[3], box_2[3]),
     ], dtype=float)
-
 
 
 def boxes_overlap_panel(detections, panel):
@@ -595,6 +658,70 @@ def draw_dashboard(frame, detections, now_str, vehicle_count, contact_frame_coun
     else:
         put("State: Safe", green, normal, 2)
 
+
+def build_incident_code(timestamp: str, total: int) -> str:
+    return f"AI-{timestamp}-{total:03d}"
+
+
+def calculate_detection_confidence(vehicle_detections, contact_frame_count, accident_confidence=0.0) -> float:
+    if accident_confidence:
+        return min(0.99, max(0.0, float(accident_confidence)))
+
+    vehicle_confidence = max((float(detection["conf"]) for detection in vehicle_detections), default=0.5)
+    contact_confidence = 0.5 + min(
+        0.45,
+        max(0, contact_frame_count - REQUIRED_CONTACT_FRAMES + 1) * 0.1,
+    )
+    return round(min(0.99, max(vehicle_confidence, contact_confidence)), 4)
+
+
+def send_incident_to_backend(webhook_client, incident, video_file_path=None):
+    payload = DetectionWebhookClient.build_payload(
+        incident_code=incident["incident_code"],
+        severity=incident["severity"],
+        confidence=incident["confidence"],
+        location_name=LOCATION,
+        latitude=LATITUDE,
+        longitude=LONGITUDE,
+        camera=CAMERA_ID,
+        snapshot_path=str(incident["snapshot_path"]),
+        video_path=None,
+        priority=incident["priority"],
+        timestamp=incident["detected_at"],
+        metadata={
+            "clip_seconds_before": CLIP_SECONDS_BEFORE,
+            "clip_seconds_after": CLIP_SECONDS_AFTER,
+            "contact_frames": incident["contact_frames"],
+            "vehicle_count": incident["vehicle_count"],
+            "source": "camera" if USE_CAMERA else "video",
+            **incident.get("metadata", {}),
+        },
+    )
+    return webhook_client.send_detection_to_backend(payload, video_file_path=str(video_file_path) if video_file_path else None)
+
+
+def finalize_incident_clip_and_send(webhook_client, incident, pre_frames, post_frames, fps, width, height):
+    video_file_path = incident["video_path"]
+    clip_saved = save_video_clip(pre_frames, post_frames, video_file_path, fps, width, height)
+    if not clip_saved:
+        logging.error("Sending incident %s without video clip.", incident["incident_code"])
+        video_file_path = None
+
+    sent = send_incident_to_backend(webhook_client, incident, video_file_path)
+    if not sent:
+        logging.error("Backend webhook failed for incident %s; local clip kept at %s", incident["incident_code"], incident["video_path"])
+
+
+def open_capture():
+    if USE_CAMERA:
+        source = CAMERA_SOURCE
+        if sys.platform.startswith("win"):
+            return cv2.VideoCapture(source, cv2.CAP_DSHOW), f"Webcam {source}"
+        return cv2.VideoCapture(source), f"Webcam {source}"
+
+    return cv2.VideoCapture(str(VIDEO_PATH)), str(VIDEO_PATH)
+
+
 # ------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------
@@ -602,7 +729,7 @@ def main():
     vehicle_model = YOLO(str(VEHICLE_MODEL_PATH))
     vehicle_names = normalize_names(vehicle_model.names)
     print("Vehicle model classes:", vehicle_names)
-    logging.info(f"Vehicle model classes: {vehicle_names}")
+    logging.info("Vehicle model classes: %s", vehicle_names)
     print(f"Vehicle confidence threshold: {VEHICLE_CONFIDENCE:.2f}")
     print(f"Prototype mode: {PROTOTYPE_MODE}")
 
@@ -615,7 +742,7 @@ def main():
         inspected_model = YOLO(str(ACCIDENT_MODEL_PATH))
         accident_names = normalize_names(inspected_model.names)
         print("Accident model classes:", accident_names)
-        logging.info(f"Accident model classes: {accident_names}")
+        logging.info("Accident model classes: %s", accident_names)
         if is_valid_accident_model(accident_names):
             accident_model = inspected_model
             print("Accident model enabled: best.pt contains an accident/crash/collision class.")
@@ -625,23 +752,35 @@ def main():
             logging.warning("Accident classification unavailable: best.pt has no accident/crash/collision class.")
     else:
         print(f"Accident classification unavailable: missing {ACCIDENT_MODEL_PATH}")
-        logging.warning(f"Accident classification unavailable: missing {ACCIDENT_MODEL_PATH}")
+        logging.warning("Accident classification unavailable: missing %s", ACCIDENT_MODEL_PATH)
 
-    source = 1 if USE_CAMERA else str(VIDEO_PATH)
-    cap = cv2.VideoCapture(source, cv2.CAP_DSHOW) if USE_CAMERA else cv2.VideoCapture(source)
-
+    cap, source_label = open_capture()
     if not cap.isOpened():
-        msg = "Webcam" if USE_CAMERA else str(VIDEO_PATH)
-        logging.error(f"Cannot open source: {msg}")
-        print(f"[ERROR] Cannot open: {msg}")
+        logging.error("Cannot open source: %s", source_label)
+        print(f"[ERROR] Cannot open: {source_label}")
         return
 
-    fps = int(cap.get(cv2.CAP_PROP_FPS)) or 20
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 20)
+    if fps <= 0:
+        fps = 20.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    source_label = "Webcam" if USE_CAMERA else str(VIDEO_PATH)
-    print(f"\nStarting: {source_label}\n")
+    pre_frame_count = max(1, int(round(CLIP_SECONDS_BEFORE * fps)))
+    post_frame_count = max(1, int(round(CLIP_SECONDS_AFTER * fps)))
+
+    webhook_client = DetectionWebhookClient(
+        webhook_url=BACKEND_WEBHOOK_URL,
+        secret=AI_WEBHOOK_SECRET,
+        timeout_seconds=WEBHOOK_TIMEOUT_SECONDS,
+        max_retries=WEBHOOK_MAX_RETRIES,
+        retry_backoff_seconds=WEBHOOK_RETRY_BACKOFF_SECONDS,
+        cooldown_seconds=WEBHOOK_COOLDOWN,
+    )
+
+    print(f"\nStarting: {source_label}")
+    print(f"Backend webhook: {BACKEND_WEBHOOK_URL}")
+    print(f"Clip window: -{CLIP_SECONDS_BEFORE}s/+{CLIP_SECONDS_AFTER}s\n")
 
     total_accidents = 0
     alarm_active = False
@@ -651,18 +790,14 @@ def main():
     tracks = {}
     next_track_id = 1
     contact_counts = {}
-    contact_missed_counts = {}  # track missed frames per pair
-    last_alert_times = {}
-    prototype_clear_frames = 0
+    contact_missed_counts = {}
 
-    # rolling buffer holding the last N seconds of raw frames
-    pre_frames = deque(maxlen=VIDEO_PRE_SEC * fps)
-    recording_post = False
+    pre_frames = deque(maxlen=pre_frame_count)
+    recording_incident = None
     post_frames = []
-    current_video_path = Path("")
+    pending_threads = []
 
     headless = os.getenv("AEYE_HEADLESS", "0") == "1"
-
     read_failures = 0
 
     try:
@@ -671,7 +806,7 @@ def main():
             if not ret:
                 read_failures += 1
                 if USE_CAMERA and read_failures <= 10:
-                    logging.warning(f"Camera frame read failed; retry {read_failures}/10")
+                    logging.warning("Camera frame read failed; retry %s/10", read_failures)
                     time.sleep(0.1)
                     continue
                 break
@@ -679,20 +814,30 @@ def main():
 
             frame_to_show = frame.copy()
 
-            # feed the pre-accident buffer or collect post-accident frames
-            if not recording_post:
+            if recording_incident is None:
                 pre_frames.append(frame.copy())
             else:
                 post_frames.append(frame.copy())
-                if len(post_frames) >= (VIDEO_POST_SEC * fps):
-                    threading.Thread(
-                        target=save_video_clip,
-                        args=(list(pre_frames), post_frames.copy(),
-                              current_video_path, fps, width, height),
-                        daemon=True
-                    ).start()
-                    recording_post = False
+                if len(post_frames) >= post_frame_count:
+                    incident_to_send = recording_incident
+                    thread = threading.Thread(
+                        target=finalize_incident_clip_and_send,
+                        args=(
+                            webhook_client,
+                            incident_to_send,
+                            incident_to_send["pre_frames"],
+                            post_frames.copy(),
+                            fps,
+                            width,
+                            height,
+                        ),
+                        daemon=False,
+                    )
+                    thread.start()
+                    pending_threads.append(thread)
+                    recording_incident = None
                     post_frames = []
+                    pre_frames.append(frame.copy())
 
             vehicle_detections = detect_vehicles(vehicle_model, frame)
             vehicle_count = len(vehicle_detections)
@@ -704,47 +849,65 @@ def main():
             accident_track_ids = set()
             contact_frame_count = 0
             prototype_alert_pair = None
-            prototype_debug = {"iou": 0.0, "gap": 0.0, "center_distance": 0.0, "contact_frames": 0, "movement_1": 0.0, "movement_2": 0.0, "contact_condition": False, "minimal_movement": False, "pair": "-", "threshold_reached": False, "accident_detected": False, "active_tracks": 0, "track_ids": []}
+            prototype_debug = {
+                "iou": 0.0,
+                "gap": 0.0,
+                "center_distance": 0.0,
+                "contact_frames": 0,
+                "movement_1": 0.0,
+                "movement_2": 0.0,
+                "contact_condition": False,
+                "minimal_movement": False,
+                "pair": "-",
+                "threshold_reached": False,
+                "accident_detected": False,
+                "active_tracks": 0,
+                "track_ids": [],
+            }
+            best_accident_confidence = 0.0
+            best_accident_class = ""
 
             if PROTOTYPE_MODE:
                 accident_detected, accident_track_ids, contact_frame_count, prototype_alert_pair, prototype_debug = evaluate_prototype_contacts(
-                    tracks, contact_counts, contact_missed_counts, last_alert_times
+                    tracks,
+                    contact_counts,
+                    contact_missed_counts,
                 )
 
-                # Clear cooldown tracking only after sustained loss of contact
-                if contact_frame_count == 0:
-                    prototype_clear_frames += 1
-                else:
-                    prototype_clear_frames = 0
-
-                # When threshold is reached, accident_detected is already True.
-                # No suppression — let the alert fire every frame while contact holds.
                 if prototype_alert_pair:
                     severity, priority, color = calculate_prototype_severity(
                         prototype_alert_pair["center_distance"]
                     )
-                    # Explicitly confirm accident_detected = True
                     accident_detected = True
                     logging.info(
-                        f"Prototype contact alert | pair={prototype_alert_pair['pair']} "
-                        f"frames={prototype_alert_pair['frames']} vehicles={vehicle_count} "
-                        f"severity={severity} priority={priority}"
+                        "Prototype contact alert | pair=%s frames=%s vehicles=%s severity=%s priority=%s",
+                        prototype_alert_pair["pair"],
+                        prototype_alert_pair["frames"],
+                        vehicle_count,
+                        severity,
+                        priority,
                     )
 
-                # Debug print to terminal
-                if prototype_debug.get('contact_condition') or accident_detected:
-                    print(f"[DEBUG] tracks={prototype_debug.get('active_tracks',0)} IDs={prototype_debug.get('track_ids',[])} "
-                          f"pair={prototype_debug.get('pair','-')} IoU={prototype_debug.get('iou',0):.4f} "
-                          f"centerDist={prototype_debug.get('center_distance',0):.1f} "
-                          f"contact_frames={prototype_debug.get('contact_frames',0)} "
-                          f"contact={prototype_debug.get('contact_condition',False)} "
-                          f"threshold={prototype_debug.get('threshold_reached',False)} "
-                          f"accident_detected={accident_detected} sev={severity} pri={priority}")
+                if prototype_debug.get("contact_condition") or accident_detected:
+                    print(
+                        f"[DEBUG] tracks={prototype_debug.get('active_tracks', 0)} "
+                        f"IDs={prototype_debug.get('track_ids', [])} "
+                        f"pair={prototype_debug.get('pair', '-')} "
+                        f"IoU={prototype_debug.get('iou', 0):.4f} "
+                        f"centerDist={prototype_debug.get('center_distance', 0):.1f} "
+                        f"contact_frames={prototype_debug.get('contact_frames', 0)} "
+                        f"contact={prototype_debug.get('contact_condition', False)} "
+                        f"threshold={prototype_debug.get('threshold_reached', False)} "
+                        f"accident_detected={accident_detected} sev={severity} pri={priority}"
+                    )
             elif accident_model is not None:
                 candidate_accidents = []
                 for detection in vehicle_detections:
                     is_accident, accident_conf, accident_class = detect_accident_in_vehicle(
-                        accident_model, accident_names, frame, detection
+                        accident_model,
+                        accident_names,
+                        frame,
+                        detection,
                     )
                     if is_accident:
                         candidate_accidents.append((detection, accident_conf, accident_class))
@@ -757,24 +920,25 @@ def main():
                 accident_detected = accident_streak >= REQUIRED_CONTACT_FRAMES
                 contact_frame_count = accident_streak
                 if accident_detected:
-                    best_detection, best_accident_conf, best_accident_class = max(
-                        candidate_accidents, key=lambda item: item[1]
+                    best_detection, best_accident_confidence, best_accident_class = max(
+                        candidate_accidents,
+                        key=lambda item: item[1],
                     )
                     severity, priority, color = calculate_severity_from_vehicle(
-                        best_detection["box"], best_accident_conf
+                        best_detection["box"],
+                        best_accident_confidence,
                     )
                     accident_track_ids.add(best_detection.get("track_id"))
                     logging.info(
-                        f"Persistent accident candidate: {best_accident_class} "
-                        f"conf={best_accident_conf:.2f} streak={accident_streak}"
+                        "Persistent accident candidate: %s conf=%.2f streak=%s",
+                        best_accident_class,
+                        best_accident_confidence,
+                        accident_streak,
                     )
 
             for detection in vehicle_detections:
                 draw_vehicle(frame_to_show, detection, detection.get("track_id") in accident_track_ids, color)
 
-            # ----------------------------------------------------------
-            # DASHBOARD OVERLAY
-            # ----------------------------------------------------------
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             draw_dashboard(
                 frame_to_show,
@@ -789,42 +953,65 @@ def main():
                 color,
             )
 
-            # ----------------------------------------------------------
-            # SNAPSHOT + LOGS
-            # ----------------------------------------------------------
-            snap_path = Path("")
+            snap_path = None
             current_time = time.time()
 
-            if accident_detected and (current_time - last_snap_time >= SNAP_COOLDOWN):
+            if (
+                accident_detected
+                and recording_incident is None
+                and (current_time - last_snap_time >= SNAP_COOLDOWN)
+            ):
                 total_accidents += 1
                 last_snap_time = current_time
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                snap_path = OUTPUT_DIR / f"accident_{total_accidents}_{severity}_{timestamp}.jpg"
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                incident_code = build_incident_code(timestamp, total_accidents)
+                snap_path = OUTPUT_DIR / f"{incident_code}_{severity}.jpg"
+                clip_path = CLIP_DIR / f"{incident_code}_{severity}.mp4"
+                detected_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
                 saved = cv2.imwrite(str(snap_path), frame_to_show)
                 if saved:
-                    current_video_path = OUTPUT_DIR / f"video_{total_accidents}_{severity}_{timestamp}.mp4"
-                    recording_post = True
+                    confidence = calculate_detection_confidence(
+                        vehicle_detections,
+                        contact_frame_count,
+                        best_accident_confidence,
+                    )
+                    recording_incident = {
+                        "incident_code": incident_code,
+                        "severity": severity,
+                        "priority": priority,
+                        "confidence": confidence,
+                        "snapshot_path": snap_path,
+                        "video_path": clip_path,
+                        "detected_at": detected_at,
+                        "contact_frames": contact_frame_count,
+                        "vehicle_count": vehicle_count,
+                        "pre_frames": list(pre_frames),
+                        "metadata": {
+                            "accident_number": total_accidents,
+                            "prototype_mode": PROTOTYPE_MODE,
+                            "accident_class": best_accident_class,
+                            "debug": {
+                                key: str(value) if isinstance(value, tuple) else value
+                                for key, value in prototype_debug.items()
+                            },
+                        },
+                    }
                     post_frames = []
-                    log_accident(total_accidents, severity, priority, snap_path, current_video_path)
+                    log_accident(total_accidents, severity, priority, snap_path, clip_path)
                 else:
-                    logging.error(f"Failed to save snapshot: {snap_path}")
-                    snap_path = Path("")
+                    logging.error("Failed to save snapshot: %s", snap_path)
+                    snap_path = None
 
-            # ----------------------------------------------------------
-            # ALARM
-            # ----------------------------------------------------------
             if accident_detected and not alarm_active:
                 alarm_active = True
                 play_alarm()
             if not accident_detected:
                 alarm_active = False
 
-            # ----------------------------------------------------------
-            # TERMINAL
-            # ----------------------------------------------------------
             if accident_detected and not last_status:
-                print_terminal(True, vehicle_count, contact_frame_count, severity, priority, str(snap_path) if snap_path else "")
-                logging.info(f"Alert | {severity} | {priority}")
+                print_terminal(True, vehicle_count, contact_frame_count, severity, priority, str(snap_path) if snap_path is not None else "")
+                logging.info("Alert | %s | %s", severity, priority)
             elif not accident_detected and last_status:
                 print_terminal(False, vehicle_count, contact_frame_count)
             elif not last_status:
@@ -832,23 +1019,34 @@ def main():
 
             last_status = accident_detected
 
-            # ----------------------------------------------------------
-            # DISPLAY
-            # ----------------------------------------------------------
             if not headless:
                 cv2.imshow("AI Accident Dashboard", frame_to_show)
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
 
-    except Exception as e:
-        logging.exception(f"Unexpected error: {e}")
-        print(f"\n[ERROR] {e}")
+    except Exception as exc:
+        logging.exception("Unexpected error: %s", exc)
+        print(f"\n[ERROR] {exc}")
 
     finally:
+        if recording_incident is not None:
+            finalize_incident_clip_and_send(
+                webhook_client,
+                recording_incident,
+                recording_incident["pre_frames"],
+                post_frames.copy(),
+                fps,
+                width,
+                height,
+            )
+
+        for thread in pending_threads:
+            thread.join(timeout=(WEBHOOK_TIMEOUT_SECONDS * WEBHOOK_MAX_RETRIES) + 10)
+
         cap.release()
         if not headless:
             cv2.destroyAllWindows()
-        logging.info(f"Session ended | Total accidents: {total_accidents}")
+        logging.info("Session ended | Total accidents: %s", total_accidents)
 
         print("\n" + "=" * 52)
         print("  Session Ended")
@@ -860,11 +1058,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-

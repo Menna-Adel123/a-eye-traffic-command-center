@@ -12,6 +12,12 @@ from typing import Any, Dict, Optional
 import requests
 
 
+def _json_default(value):
+    if hasattr(value, "item"):
+        return value.item()
+    return str(value)
+
+
 class DetectionWebhookClient:
     def __init__(
         self,
@@ -92,7 +98,7 @@ class DetectionWebhookClient:
             headers["x-ai-webhook-secret"] = self.secret
 
         data = {
-            key: json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+            key: json.dumps(value, default=_json_default) if isinstance(value, (dict, list)) else str(value)
             for key, value in payload.items()
             if value is not None
         }
@@ -118,7 +124,20 @@ class DetectionWebhookClient:
 
                 if 200 <= response.status_code < 300:
                     self._last_sent_at = time.time()
-                    logging.info("Webhook sent successfully: %s", response.text[:500])
+                    try:
+                        response_payload = response.json()
+                    except ValueError:
+                        response_payload = {}
+
+                    incident = response_payload.get("incident") if isinstance(response_payload, dict) else None
+                    if incident:
+                        logging.info(
+                            "Webhook sent successfully: incident id=%s code=%s",
+                            incident.get("id"),
+                            incident.get("incidentCode"),
+                        )
+                    else:
+                        logging.info("Webhook sent successfully: %s", response.text[:500])
                     return True
 
                 logging.warning(
