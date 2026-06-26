@@ -57,7 +57,11 @@ from config import (
     WEBHOOK_MAX_RETRIES,
     WEBHOOK_RETRY_BACKOFF_SECONDS,
     WEBHOOK_TIMEOUT_SECONDS,
+    CLEAR_FRAMES_REQUIRED,
+    INCIDENT_COOLDOWN_SECONDS,
+    MAX_CLIP_SECONDS,
 )
+from incident_manager import AccidentDetection, IncidentManager
 from webhook_client import DetectionWebhookClient
 
 # ------------------------------------------------------------------
@@ -766,8 +770,7 @@ def main():
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    pre_frame_count = max(1, int(round(CLIP_SECONDS_BEFORE * fps)))
-    post_frame_count = max(1, int(round(CLIP_SECONDS_AFTER * fps)))
+
 
     webhook_client = DetectionWebhookClient(
         webhook_url=BACKEND_WEBHOOK_URL,
@@ -782,20 +785,33 @@ def main():
     print(f"Backend webhook: {BACKEND_WEBHOOK_URL}")
     print(f"Clip window: -{CLIP_SECONDS_BEFORE}s/+{CLIP_SECONDS_AFTER}s\n")
 
-    total_accidents = 0
+    incident_manager = IncidentManager(
+        webhook_client=webhook_client,
+        location_name=LOCATION,
+        latitude=LATITUDE,
+        longitude=LONGITUDE,
+        camera_id=CAMERA_ID,
+        output_dir=OUTPUT_DIR,
+        clip_dir=CLIP_DIR,
+        fps=fps,
+        width=width,
+        height=height,
+        pre_incident_seconds=CLIP_SECONDS_BEFORE,
+        max_clip_seconds=MAX_CLIP_SECONDS,
+        clear_frames_required=CLEAR_FRAMES_REQUIRED,
+        cooldown_seconds=INCIDENT_COOLDOWN_SECONDS,
+        prototype_mode=PROTOTYPE_MODE,
+        csv_file=csv_file,
+    )
+    print(f"Incident manager: max_clip={MAX_CLIP_SECONDS}s cooldown={INCIDENT_COOLDOWN_SECONDS}s clear_frames={CLEAR_FRAMES_REQUIRED}")
+
     alarm_active = False
     last_status = False
-    last_snap_time = 0.0
     accident_streak = 0
     tracks = {}
     next_track_id = 1
     contact_counts = {}
     contact_missed_counts = {}
-
-    pre_frames = deque(maxlen=pre_frame_count)
-    recording_incident = None
-    post_frames = []
-    pending_threads = []
 
     headless = os.getenv("AEYE_HEADLESS", "0") == "1"
     read_failures = 0
@@ -813,31 +829,6 @@ def main():
             read_failures = 0
 
             frame_to_show = frame.copy()
-
-            if recording_incident is None:
-                pre_frames.append(frame.copy())
-            else:
-                post_frames.append(frame.copy())
-                if len(post_frames) >= post_frame_count:
-                    incident_to_send = recording_incident
-                    thread = threading.Thread(
-                        target=finalize_incident_clip_and_send,
-                        args=(
-                            webhook_client,
-                            incident_to_send,
-                            incident_to_send["pre_frames"],
-                            post_frames.copy(),
-                            fps,
-                            width,
-                            height,
-                        ),
-                        daemon=False,
-                    )
-                    thread.start()
-                    pending_threads.append(thread)
-                    recording_incident = None
-                    post_frames = []
-                    pre_frames.append(frame.copy())
 
             vehicle_detections = detect_vehicles(vehicle_model, frame)
             vehicle_count = len(vehicle_detections)
@@ -953,55 +944,24 @@ def main():
                 color,
             )
 
+            # -- Incident Manager: handles clip lifecycle, webhook, dedup --
+            detection = AccidentDetection(
+                accident_detected=accident_detected,
+                severity=severity,
+                priority=priority,
+                confidence=calculate_detection_confidence(
+                    vehicle_detections, contact_frame_count, best_accident_confidence
+                ),
+                vehicle_count=vehicle_count,
+                contact_frames=contact_frame_count,
+                pair=prototype_alert_pair["pair"] if prototype_alert_pair else None,
+                iou=prototype_debug.get("iou", 0.0),
+                center_distance=prototype_debug.get("center_distance", 0.0),
+                accident_class=best_accident_class,
+                prototype_debug=prototype_debug,
+            )
+            incident_result = incident_manager.update(frame, frame_to_show, detection)
             snap_path = None
-            current_time = time.time()
-
-            if (
-                accident_detected
-                and recording_incident is None
-                and (current_time - last_snap_time >= SNAP_COOLDOWN)
-            ):
-                total_accidents += 1
-                last_snap_time = current_time
-                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                incident_code = build_incident_code(timestamp, total_accidents)
-                snap_path = OUTPUT_DIR / f"{incident_code}_{severity}.jpg"
-                clip_path = CLIP_DIR / f"{incident_code}_{severity}.mp4"
-                detected_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-                saved = cv2.imwrite(str(snap_path), frame_to_show)
-                if saved:
-                    confidence = calculate_detection_confidence(
-                        vehicle_detections,
-                        contact_frame_count,
-                        best_accident_confidence,
-                    )
-                    recording_incident = {
-                        "incident_code": incident_code,
-                        "severity": severity,
-                        "priority": priority,
-                        "confidence": confidence,
-                        "snapshot_path": snap_path,
-                        "video_path": clip_path,
-                        "detected_at": detected_at,
-                        "contact_frames": contact_frame_count,
-                        "vehicle_count": vehicle_count,
-                        "pre_frames": list(pre_frames),
-                        "metadata": {
-                            "accident_number": total_accidents,
-                            "prototype_mode": PROTOTYPE_MODE,
-                            "accident_class": best_accident_class,
-                            "debug": {
-                                key: str(value) if isinstance(value, tuple) else value
-                                for key, value in prototype_debug.items()
-                            },
-                        },
-                    }
-                    post_frames = []
-                    log_accident(total_accidents, severity, priority, snap_path, clip_path)
-                else:
-                    logging.error("Failed to save snapshot: %s", snap_path)
-                    snap_path = None
 
             if accident_detected and not alarm_active:
                 alarm_active = True
@@ -1029,28 +989,16 @@ def main():
         print(f"\n[ERROR] {exc}")
 
     finally:
-        if recording_incident is not None:
-            finalize_incident_clip_and_send(
-                webhook_client,
-                recording_incident,
-                recording_incident["pre_frames"],
-                post_frames.copy(),
-                fps,
-                width,
-                height,
-            )
-
-        for thread in pending_threads:
-            thread.join(timeout=(WEBHOOK_TIMEOUT_SECONDS * WEBHOOK_MAX_RETRIES) + 10)
+        incident_manager.cleanup()
 
         cap.release()
         if not headless:
             cv2.destroyAllWindows()
-        logging.info("Session ended | Total accidents: %s", total_accidents)
+        logging.info("Session ended | Total accidents: %s", incident_manager.total_accidents)
 
         print("\n" + "=" * 52)
         print("  Session Ended")
-        print(f"  Total Accidents : {total_accidents}")
+        print(f"  Total Accidents : {incident_manager.total_accidents}")
         print(f"  TXT Log         : {log_file}")
         print(f"  CSV Log         : {csv_file}")
         print("=" * 52 + "\n")
